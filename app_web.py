@@ -12,14 +12,8 @@ if 'precisa_confirmar_duplicado' not in st.session_state:
 # FUNÇÃO DE CONEXÃO AO BANCO DE DADOS (Configurada para PostgreSQL)
 # ==============================================================================
 def obter_conexao():
-    # Caso vá hospedar na nuvem (Supabase/Neon), substitua pelos dados fornecidos por eles
-    return psycopg2.connect(
-        host="localhost",
-        database="db_zenite",
-        user="postgres",
-        password="SUA_SENHA_AQUI",
-        port="5432"
-    )
+    # Puxa a string de conexão configurada com segurança no painel do Streamlit
+    return psycopg2.connect(st.secrets["DATABASE_URL"])
 
 # ==============================================================================
 # FUNÇÕES DE LEITURA E VERIFICAÇÃO NATIVAS
