@@ -1,5 +1,5 @@
 import streamlit as st
-import psycopg2  # Alterado de pyodbc para psycopg2
+import psycopg2
 import pandas as pd
 import datetime
 
@@ -9,11 +9,18 @@ if 'precisa_confirmar_duplicado' not in st.session_state:
     st.session_state.precisa_confirmar_duplicado = False
 
 # ==============================================================================
-# FUNÇÃO DE CONEXÃO AO BANCO DE DADOS (Configurada para PostgreSQL)
+# FUNÇÃO DE CONEXÃO AO BANCO DE DADOS (PostgreSQL)
 # ==============================================================================
 def obter_conexao():
-    # Puxa a string de conexão configurada com segurança no painel do Streamlit
-    return psycopg2.connect(st.secrets["DATABASE_URL"])
+    # Para rodar no Streamlit Cloud com o Pooler seguro, você pode alternativamente usar:
+    # return psycopg2.connect(st.secrets["DATABASE_URL"])
+    return psycopg2.connect(
+        host="localhost",
+        database="db_zenite",
+        user="postgres",
+        password="SUA_SENHA_AQUI",
+        port="5432"
+    )
 
 # ==============================================================================
 # FUNÇÕES DE LEITURA E VERIFICAÇÃO NATIVAS
@@ -41,26 +48,23 @@ def listar_jogadores():
 def verificar_data_existente(data_str):
     with obter_conexao() as conn:
         with conn.cursor() as cursor:
-            # Trocado ? por %s
             cursor.execute("SELECT COUNT(*) FROM partida WHERE data_partida = %s", (data_str,))
-            return cursor.fetchone()[0] > 0  # Trocado fetchval() por fetchone()[0]
+            return cursor.fetchone()[0] > 0
 
 # ==============================================================================
-# SUB-ROTINA DE SALVAMENTO DE PARTIDA
+# SUB-ROTINA DE SALVAMENTO DE PARTIDA COMPLETA
 # ==============================================================================
 def executar_salvamento_partida(data_jogo, id_comp_final, fase_jogo, local_jogo, id_adv_final, gols_pro, gols_contra, p_pro, p_contra, wo_val, dados_finais_jogadores, dict_jogadores):
     try:
         with obter_conexao() as conn:
             with conn.cursor() as cursor:
-                
-                # Adaptado para a sintaxe RETURNING do PostgreSQL e placeholders %s
                 query_partida = """
                 INSERT INTO partida (data_partida, id_competicao, fase, local, id_adversario, gols_pro, gols_contra, penaltis_pro, penaltis_contra, houve_wo, id_tecnico)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)
                 RETURNING id_partida;
                 """
                 cursor.execute(query_partida, (data_jogo.strftime('%Y-%m-%d'), id_comp_final, fase_jogo, local_jogo, id_adv_final, gols_pro, gols_contra, p_pro, p_contra, wo_val))
-                id_partida_gerado = cursor.fetchone()[0] # Trocado fetchval() por fetchone()[0]
+                id_partida_gerado = cursor.fetchone()[0]
                 
                 if dados_finais_jogadores is not None:
                     for index, row in dados_finais_jogadores.iterrows():
@@ -70,10 +74,8 @@ def executar_salvamento_partida(data_jogo, id_comp_final, fase_jogo, local_jogo,
                         amarelo = int(row['Cartão Amarelo'])
                         vermelho = int(row['Cartão Vermelho'])
                         
-                        # Presença (Uso de %s)
                         cursor.execute("INSERT INTO participacao_jogador (id_partida, id_jogador) VALUES (%s, %s)", (id_partida_gerado, id_atleta))
                         
-                        # Eventos (Uso de %s)
                         if gols > 0:
                             cursor.execute("INSERT INTO evento_jogador (id_partida, id_jogador, tipo_evento, quantidade) VALUES (%s, %s, 'GOL', %s)", (id_partida_gerado, id_atleta, gols))
                         if amarelo > 0:
@@ -82,23 +84,19 @@ def executar_salvamento_partida(data_jogo, id_comp_final, fase_jogo, local_jogo,
                             cursor.execute("INSERT INTO evento_jogador (id_partida, id_jogador, tipo_evento, quantidade) VALUES (%s, %s, 'VERMELHO', %s)", (id_partida_gerado, id_atleta, vermelho))
                 
                 conn.commit()
-                
                 st.session_state.mensagem_sucesso_partida = f"Partida salva com sucesso! ID Gerado: {id_partida_gerado}"
                 st.session_state.lancar_baloes = True
                 
                 chaves_partida = ["input_data_jogo", "input_local", "input_fase", "input_gols_pro", "input_gols_contra", "input_wo", "input_penaltis_pro", "input_usar_penaltis", "input_penaltis_contra", "input_jogadores"]
                 for c in chaves_partida:
                     if c in st.session_state: del st.session_state[c]
-                
                 st.rerun()
     except Exception as e:
         st.error(f"Erro crítico ao salvar no banco de dados: {e}")
 
 # ==============================================================================
-# CORPO PRINCIPAL DO SISTEMA
+# CARREGAMENTO GLOBAL DE DICIONÁRIOS
 # ==============================================================================
-st.title("⚽ Estatísticas Zenite FS")
-
 df_comp = listar_competicoes()
 df_adv = listar_adversarios()
 df_jog = listar_jogadores()
@@ -111,9 +109,190 @@ dict_comp = dict(zip(df_comp['nome'], df_comp['id_competicao'])) if not df_comp.
 dict_adv = dict(zip(df_adv['nome'], df_adv['id_adversario'])) if not df_adv.empty else {}
 dict_jogadores = dict(zip(df_jog['nome'], df_jog['id_jogador'])) if not df_jog.empty else {}
 
-aba_partida, aba_cadastros, aba_est_equipe, aba_est_jogador = st.tabs(["📝 Registar Nova Partida", "➕ Gerir Cadastros (Novas Entidades)", "📊 Estatísticas da Equipe", "🏃 Estatísticas dos Jogadores"])
+# ==============================================================================
+# CORPO PRINCIPAL E CRIAÇÃO DAS ABAS
+# ==============================================================================
+st.title("⚽ Estatísticas Zenite FS")
 
-# ABA 1: REGISTAR NOVA PARTIDA
+aba_home, aba_historico, aba_partida, aba_cadastros, aba_est_equipe, aba_est_jogador = st.tabs([
+    "🏠 Tela Inicial", "⚽ Histórico de Partidas", "📝 Registrar Nova Partida", 
+    "➕ Gerir Cadastros (Novas Entidades)", "📊 Estatísticas da Equipe", "🏃 Estatísticas dos Jogadores"
+])
+
+# ==============================================================================
+# ABA 1: TELA INICIAL
+# ==============================================================================
+with aba_home:
+    st.header("🏠 Painel de Boas-Vindas")
+    
+    # Seção da foto do elenco
+    # NOTA: Altere a URL abaixo para o link da foto oficial do seu elenco hospedada na nuvem ou Supabase Storage
+    url_foto_elenco = "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?q=80&w=1200&auto=format&fit=crop"
+    st.image(url_foto_elenco, caption="Elenco Oficial - Zenite FS", use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Colunas para dividir "Última Partida" e "Agendar Próxima"
+    col_esquerda, col_direita = st.columns(2)
+    
+    with col_esquerda:
+        st.subheader("⏮️ Última Partida Jogada")
+        q_ultima = """
+            SELECT p.id_partida, p.data_partida, c.nome as competicao, a.nome as adversario, 
+                   p.gols_pro, p.gols_contra, p.local, p.fase, p.houve_wo
+            FROM partida p
+            LEFT JOIN competicao c ON p.id_competicao = c.id_competicao
+            LEFT JOIN adversario a ON p.id_adversario = a.id_adversario
+            WHERE p.data_partida <= CURRENT_DATE
+            ORDER BY p.data_partida DESC, p.id_partida DESC
+            LIMIT 1
+        """
+        df_ultima = carregar_dataframe(q_ultima)
+        
+        if not df_ultima.empty:
+            partida_rec = df_ultima.iloc[0]
+            data_f = pd.to_datetime(partida_rec['data_partida']).strftime('%d/%m/%Y')
+            
+            st.markdown(f"**Competição:** {partida_rec['competicao']} ({partida_rec['fase']})")
+            st.markdown(f"**Local:** {partida_rec['local']} | **Data:** {data_f}")
+            
+            c_m1, c_m2, c_m3 = st.columns(3)
+            c_m1.metric("ZENITE", partida_rec['gols_pro'])
+            c_m2.markdown("<h2 style='text-align: center; margin-top: 10px;'>X</h2>", unsafe_allow_html=True)
+            c_m3.metric(str(partida_rec['adversario']), partida_rec['gols_contra'])
+            
+            if partida_rec['houve_wo']:
+                st.warning("Partida decidida por WO.")
+        else:
+            st.info("Nenhuma partida jogada encontrada no histórico.")
+            
+    with col_direita:
+        st.subheader("📅 Agendar Próxima Partida")
+        if 'sucesso_agenda' in st.session_state:
+            st.success(st.session_state.sucesso_agenda)
+            del st.session_state.sucesso_agenda
+            
+        with st.form("form_proxima_partida"):
+            prox_data = st.date_input("Data do Confronto", datetime.date.today() + datetime.timedelta(days=7))
+            prox_comp = st.selectbox("Competição", list_comp_nomes, key="prox_comp_key")
+            prox_adv = st.selectbox("Adversário", list_adv_nomes, key="prox_adv_key")
+            prox_local = st.text_input("Local", "Playball Pompeia")
+            prox_fase = st.text_input("Fase", "Fase de Grupos")
+            
+            if st.form_submit_button("Agendar Partida", type="primary"):
+                if not prox_comp or not prox_adv:
+                    st.error("Por favor, preencha a Competição e o Adversário.")
+                else:
+                    try:
+                        with obter_conexao() as conn:
+                            with conn.cursor() as cursor:
+                                q_agenda = """
+                                INSERT INTO partida (data_partida, id_competicao, fase, local, id_adversario, gols_pro, gols_contra, houve_wo)
+                                VALUES (%s, %s, %s, %s, %s, 0, 0, FALSE)
+                                """
+                                cursor.execute(q_agenda, (prox_data.strftime('%Y-%m-%d'), dict_comp[prox_comp], prox_fase, prox_local, dict_adv[prox_adv]))
+                            conn.commit()
+                        st.session_state.sucesso_agenda = f"Próximo jogo contra o {prox_adv} agendado para {prox_data.strftime('%d/%m/%Y')}!"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao agendar partida: {e}")
+
+# ==============================================================================
+# ABA 2: HISTÓRICO DE PARTIDAS & FICHA TÉCNICA
+# ==============================================================================
+with aba_historico:
+    st.header("📋 Linha do Tempo e Fichas Técnicas")
+    
+    # Buscar anos com partidas salvas no sistema
+    q_anos = "SELECT DISTINCT EXTRACT(YEAR FROM data_partida)::int as ano FROM partida ORDER BY ano DESC"
+    df_anos = carregar_dataframe(q_anos)
+    
+    if df_anos.empty:
+        st.info("Nenhuma partida registrada no banco para listagem.")
+    else:
+        lista_anos = df_anos['ano'].tolist()
+        ano_selecionado = st.selectbox("Selecione o Ano Cronológico:", lista_anos)
+        
+        # Listar todas as partidas daquele ano
+        q_lista_jogos = """
+            SELECT p.id_partida, p.data_partida, c.nome as competicao, a.nome as adversario, 
+                   p.gols_pro, p.gols_contra, p.fase
+            FROM partida p
+            LEFT JOIN competicao c ON p.id_competicao = c.id_competicao
+            LEFT JOIN adversario a ON p.id_adversario = a.id_adversario
+            WHERE EXTRACT(YEAR FROM p.data_partida) = %s
+            ORDER BY p.data_partida DESC, p.id_partida DESC
+        """
+        df_jogos_ano = carregar_dataframe(q_lista_jogos, (ano_selecionado,))
+        
+        if df_jogos_ano.empty:
+            st.warning("Nenhum registro localizado para este ano.")
+        else:
+            # Criando uma lista legível para o selectbox
+            df_jogos_ano['descricao'] = df_jogos_ano.apply(
+                lambda r: f"{pd.to_datetime(r['data_partida']).strftime('%d/%m/%Y')} - Zenite {r['gols_pro']} x {r['gols_contra']} {r['adversario']} ({r['competicao']})", axis=1
+            )
+            
+            partida_selecionada_desc = st.selectbox("Selecione uma Partida Específica para ver a Ficha Técnica:", df_jogos_ano['descricao'].tolist())
+            id_partida_sel = int(df_jogos_ano[df_jogos_ano['descricao'] == partida_selecionada_desc]['id_partida'].values[0])
+            
+            # --- DETALHAMENTO DA FICHA TÉCNICA ---
+            st.markdown("### 📋 Ficha Técnica do Confronto")
+            
+            col_f1, col_f2, col_f3 = st.columns(3)
+            
+            with col_f1:
+                st.markdown("#### 🏃 Relacionados / Presentes")
+                q_presentes = """
+                    SELECT j.nome, COALESCE(j.posicao, 'Não Definida') as posicao 
+                    FROM participacao_jogador pj
+                    JOIN jogador j ON pj.id_jogador = j.id_jogador
+                    WHERE pj.id_partida = %s
+                    ORDER BY j.nome
+                """
+                df_presentes = carregar_dataframe(q_presentes, (id_partida_sel,))
+                if not df_presentes.empty:
+                    for idx, row in df_presentes.iterrows():
+                        st.write(f"• **{row['nome']}** _({row['posicao']})_")
+                else:
+                    st.caption("_Nenhum jogador relacionado ou partida decidida por WO._")
+                    
+            with col_f2:
+                st.markdown("#### ⚽ Gols Marcados (Zenite)")
+                q_gols = """
+                    SELECT j.nome, ej.quantidade 
+                    FROM evento_jogador ej
+                    JOIN jogador j ON ej.id_jogador = j.id_jogador
+                    WHERE ej.id_partida = %s AND ej.tipo_evento = 'GOL'
+                    ORDER BY ej.quantidade DESC
+                """
+                df_gols = carregar_dataframe(q_gols, (id_partida_sel,))
+                if not df_gols.empty:
+                    for idx, row in df_gols.iterrows():
+                        st.write(f"⚽ {row['nome']} - **{row['quantidade']}x**")
+                else:
+                    st.caption("_Nenhum gol marcado registrado para atletas nesta partida._")
+                    
+            with col_f3:
+                st.markdown("#### 🟨🟫 Disciplina / Cartões")
+                q_cartoes = """
+                    SELECT j.nome, ej.tipo_evento, ej.quantidade 
+                    FROM evento_jogador ej
+                    JOIN jogador j ON ej.id_jogador = j.id_jogador
+                    WHERE ej.id_partida = %s AND ej.tipo_evento IN ('AMARELO', 'VERMELHO')
+                    ORDER BY ej.tipo_evento
+                """
+                df_cartoes = carregar_dataframe(q_cartoes, (id_partida_sel,))
+                if not df_cartoes.empty:
+                    for idx, row in df_cartoes.iterrows():
+                        emoji = "🟨" if row['tipo_evento'] == 'AMARELO' else "🟥"
+                        st.write(f"{emoji} {row['nome']} ({row['quantidade']}x)")
+                else:
+                    st.caption("_Partida limpa! Nenhum cartão recebido._")
+
+# ==============================================================================
+# ABA 3: REGISTAR NOVA PARTIDA
+# ==============================================================================
 with aba_partida:
     if 'mensagem_sucesso_partida' in st.session_state:
         st.success(st.session_state.mensagem_sucesso_partida)
@@ -156,8 +335,6 @@ with aba_partida:
     id_adv_final = dict_adv.get(adv_selecionado)
     p_pro = penaltis_pro if usar_penaltis else None
     p_contra = penaltis_contra if usar_penaltis else None
-    
-    # Tratando o booleano do Postgres para o campo WO
     wo_val = True if houve_wo else False
 
     if not st.session_state.precisa_confirmar_duplicado:
@@ -184,7 +361,9 @@ with aba_partida:
                 st.session_state.precisa_confirmar_duplicado = False
                 st.rerun()
 
-# ABA 2: GERIR CADASTROS
+# ==============================================================================
+# ABA 4: GERIR CADASTROS
+# ==============================================================================
 with aba_cadastros:
     if 'mensagem_sucesso_cadastro' in st.session_state:
         st.success(st.session_state.mensagem_sucesso_cadastro)
@@ -240,11 +419,12 @@ with aba_cadastros:
                     st.rerun()
                 except Exception as e: st.error(f"Erro: {e}")
 
-# ABA 3: ESTATÍSTICAS DA EQUIPE
+# ==============================================================================
+# ABA 5: ESTATÍSTICAS DA EQUIPE
+# ==============================================================================
 with aba_est_equipe:
     st.header("📊 Painel de Performance Analítica da Equipe")
     
-    # Alterado YEAR(p.data_partida) para EXTRACT(YEAR FROM p.data_partida)
     q_partidas_geral = """
     SELECT p.id_partida, p.data_partida, EXTRACT(YEAR FROM p.data_partida)::int as ano,
            c.nome as nome_competicao, p.fase, p.local,
@@ -319,7 +499,9 @@ with aba_est_equipe:
             df_g_adv['Aproveitamento (%)'] = ((df_g_adv['Vitórias'] * 3 + df_g_adv['Empates']) / (df_g_adv['Partidas'] * 3) * 100).round(1)
             st.dataframe(df_g_adv.rename(columns={'nome_adversario': 'Adversário'}), hide_index=True, use_container_width=True)
 
-# ABA 4: ESTATÍSTICAS DOS JOGADORES
+# ==============================================================================
+# ABA 6: ESTATÍSTICAS DOS JOGADORES
+# ==============================================================================
 with aba_est_jogador:
     st.header("🏃 Painel de Desempenho por Jogador")
     
